@@ -1,74 +1,99 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
+#!/usr/bin/env python3
+
+from flask import Flask, jsonify, request, make_response
 from flask_migrate import Migrate
+from flask_restful import Api, Resource
+from flask_cors import CORS
+from werkzeug.exceptions import NotFound
 
-# Initialize Flask app
+from models import db, Plant
+
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///plants.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.json.compact = False
 
-# Configure database
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///plants.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-# Initialize database
-db = SQLAlchemy(app)
+CORS(app, origins="*")
 migrate = Migrate(app, db)
+db.init_app(app)
 
-# Define Plant model
-class Plant(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    image = db.Column(db.String(200))
-    price = db.Column(db.Float, nullable=False)
-    is_in_stock = db.Column(db.Boolean, default=True)
+api = Api(app)
 
-# Route to get a plant by ID
-@app.route("/plants/<int:id>", methods=["GET"])
-def get_plant(id):
-    plant = Plant.query.get(id)
-    if not plant:
-        return jsonify({"error": "Plant not found"}), 404
 
-    return jsonify({
-        "id": plant.id,
-        "name": plant.name,
-        "image": plant.image,
-        "price": plant.price,
-        "is_in_stock": plant.is_in_stock
-    })
+class Plants(Resource):
 
-# Route to update a plant's stock status
-@app.route("/plants/<int:id>", methods=["PATCH"])
-def update_plant(id):
-    plant = Plant.query.get(id)
-    if not plant:
-        return jsonify({"error": "Plant not found"}), 404
+    def get(self):
+        plants = [plant.to_dict() for plant in Plant.query.all()]
 
-    data = request.get_json()
-    if "is_in_stock" in data:
-        plant.is_in_stock = data["is_in_stock"]
+        return make_response(jsonify(plants), 200)
 
-    db.session.commit()
+    def post(self):
+        data = request.get_json()
 
-    return jsonify({
-        "id": plant.id,
-        "name": plant.name,
-        "image": plant.image,
-        "price": plant.price,
-        "is_in_stock": plant.is_in_stock
-    })
+        new_plant = Plant(
+            name=data['name'],
+            image=data['image'],
+            price=data['price'],
+             is_in_stock=data['is_in_stock'] 
+        )
 
-# Route to delete a plant
-@app.route("/plants/<int:id>", methods=["DELETE"])
-def delete_plant(id):
-    plant = Plant.query.get(id)
-    if not plant:
-        return jsonify({"error": "Plant not found"}), 404
+        db.session.add(new_plant)
+        db.session.commit()
 
-    db.session.delete(plant)
-    db.session.commit()
+        return make_response(new_plant.to_dict(), 201)
 
-    return "", 204  # No content response
+        
+api.add_resource(Plants, '/plants')
 
-# Run the app
-if __name__ == "__main__":
-    app.run(debug=True, port=5555)
+
+class PlantByID(Resource):
+
+    def get(self, id):
+        plant = Plant.query.filter_by(id=id).first().to_dict()
+
+        if plant is not None:
+            return make_response(jsonify(plant), 200)
+        
+        return make_response(jsonify({"error": "Plant not found"}), 404)
+    
+    def patch(self, id):
+        record = Plant.query.filter_by(id=id).first()
+        if record is None:
+            return {"error": "Record not found"}, 404
+
+        data = request.get_json()
+        for key, value in data.items():
+             setattr(record, key, value)
+        
+        db.session.add(record)
+        db.session.commit()
+
+        response_dict = record.to_dict()
+
+        response = make_response(jsonify(response_dict), 200)
+
+        response.headers["Content-Type"] = "application/json"
+
+        return response
+    
+    def delete(self, id):
+        record = Plant.query.filter_by(id=id).first()
+
+        if record is None:
+            return {"error": "Plant not found"}, 404
+        
+        db.session.delete(record)
+        db.session.commit()
+
+        return '', 204
+
+api.add_resource(PlantByID, '/plants/<int:id>')
+
+@app.errorhandler(NotFound)
+def handle_not_found(e):
+    response = make_response(jsonify({"error": "This resource is not found in the server"}, e), 404)
+    return response
+
+
+if __name__ == '__main__':
+    app.run(port=5555, debug=True)
